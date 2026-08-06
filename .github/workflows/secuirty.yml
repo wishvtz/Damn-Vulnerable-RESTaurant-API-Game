@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pipx install -r requirements.txt
+          python -m pip install -r requirements.txt
 
       # 4. Generate SBOM
       - name: Install Syft
@@ -59,7 +59,7 @@ jobs:
       # 6. Run SAST scan — Semgrep fails the job automatically when it finds issues
       - name: Run Semgrep
         run: |
-          pip install semgrep
+          python -m pip install semgrep
           semgrep --config auto --json --output semgrep-report.json
 
       - name: Upload Semgrep report
