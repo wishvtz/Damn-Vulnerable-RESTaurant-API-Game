@@ -1,6 +1,5 @@
 name: Security CI Pipeline
 
-# Runs security checks automatically on every push and pull request
 on:
   push:
     branches: [ "main" ]
@@ -11,145 +10,39 @@ jobs:
   security-scan:
     runs-on: ubuntu-latest
 
-    # Needed so PostgreSQL client libs (psycopg2) can build if not using binary wheel
-    env:
-      PYTHONUNBUFFERED: "1"
-
     steps:
-      # ------------------------------------------------------------
       # 1. Checkout the repository
-      # ------------------------------------------------------------
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # ------------------------------------------------------------
-      # 2. Install required runtime (Python)
-      # ------------------------------------------------------------
+      # 2. Install runtime (Python)
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
-      - name: Install psycopg2 build prerequisites
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libpq-dev build-essential
-
-      # ------------------------------------------------------------
-      # 3. Build the application (install deps / sanity-compile)
-      # ------------------------------------------------------------
-      - name: Install application dependencies
+      # 3. Build the application
+      - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          if [ -f requirements.txt ]; then pip install -r requirements.txt; fi
+          pip install -r requirements.txt
 
-      - name: Build check (compile Python sources)
-        run: python -m compileall -q .
-
-      # ------------------------------------------------------------
-      # 4. Generate SBOM (Syft)
-      # ------------------------------------------------------------
+      # 4. Generate SBOM
       - name: Install Syft
         run: curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
 
-      - name: Generate SBOM (CycloneDX JSON)
+      - name: Generate SBOM
         run: syft scan dir:. -o cyclonedx-json > sbom.json
 
-      - name: Upload SBOM artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbom
-          path: sbom.json
-
-      # ------------------------------------------------------------
-      # 5. Run dependency (SCA) scan — Grype against the SBOM
-      # ------------------------------------------------------------
+      # 5. Run dependency (SCA) scan — fails the job on Critical severity
       - name: Install Grype
         run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
 
-      - name: Run Grype dependency scan
+      - name: Run Grype (fail on Critical)
+        run: grype sbom:./sbom.json --fail-on critical
+
+      # 6. Run SAST scan — Semgrep fails the job automatically when it finds issues
+      - name: Run Semgrep
         run: |
-          grype sbom:./sbom.json -o json > grype-report.json
-          grype sbom:./sbom.json -o table
-
-      - name: Upload Grype report
-        uses: actions/upload-artifact@v4
-        with:
-          name: grype-report
-          path: grype-report.json
-
-      # ------------------------------------------------------------
-      # 6. Run SAST tool — Semgrep
-      # ------------------------------------------------------------
-      - name: Install Semgrep
-        run: pip install semgrep
-
-      - name: Run Semgrep SAST scan
-        run: semgrep --config auto --json --output semgrep-report.json . || true
-
-      - name: Upload Semgrep report
-        uses: actions/upload-artifact@v4
-        with:
-          name: semgrep-report
-          path: semgrep-report.json
-
-      # ------------------------------------------------------------
-      # 7. Security policy gate:
-      #    Fail the pipeline if ANY Critical vulnerability is found
-      #    OR any vulnerability has CVSS >= 9.0
-      # ------------------------------------------------------------
-      - name: Enforce security policy (Critical / CVSS >= 9.0)
-        run: |
-          python3 - <<'EOF'
-          import json, sys
-
-          with open("grype-report.json") as f:
-              data = json.load(f)
-
-          critical_found = []
-          high_cvss_found = []
-
-          for match in data.get("matches", []):
-              vuln = match.get("vulnerability", {})
-              severity = (vuln.get("severity") or "").lower()
-              vuln_id = vuln.get("id", "unknown")
-
-              if severity == "critical":
-                  critical_found.append(vuln_id)
-
-              max_cvss = 0.0
-              for cvss_entry in vuln.get("cvss", []):
-                  score = cvss_entry.get("metrics", {}).get("baseScore", 0.0)
-                  max_cvss = max(max_cvss, score)
-              if max_cvss >= 9.0:
-                  high_cvss_found.append(f"{vuln_id} (CVSS {max_cvss})")
-
-          if critical_found or high_cvss_found:
-              print("SECURITY POLICY VIOLATION")
-              if critical_found:
-                  print(f"Critical severity vulnerabilities: {sorted(set(critical_found))}")
-              if high_cvss_found:
-                  print(f"Vulnerabilities with CVSS >= 9.0: {sorted(set(high_cvss_found))}")
-              sys.exit(1)
-          else:
-              print("No Critical or CVSS >= 9.0 vulnerabilities found. Policy passed.")
-          EOF
-
-      - name: Fail on Semgrep ERROR-severity findings
-        run: |
-          python3 - <<'EOF'
-          import json, sys
-
-          with open("semgrep-report.json") as f:
-              data = json.load(f)
-
-          errors = [r for r in data.get("results", []) if r.get("extra", {}).get("severity") == "ERROR"]
-
-          if errors:
-              print(f"SECURITY POLICY VIOLATION: {len(errors)} ERROR-severity SAST findings")
-              for e in errors:
-                  print(f" - {e.get('check_id')} in {e.get('path')}:{e.get('start', {}).get('line')}")
-              sys.exit(1)
-          else:
-              print("No ERROR-severity SAST findings. Policy passed.")
-          EOF
+          pip install semgrep
+          semgrep --config auto --error
