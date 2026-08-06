@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pipx install -r requirements.txt
+          pipx install  requirements.txt
 
       # 4. Generate SBOM
       - name: Install Syft
