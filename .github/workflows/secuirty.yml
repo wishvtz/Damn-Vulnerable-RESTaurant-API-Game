@@ -25,7 +25,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pipx install -r requirements.txt
+          pip install -r requirements.txt
 
       # 4. Generate SBOM
       - name: Install Syft
@@ -34,15 +34,39 @@ jobs:
       - name: Generate SBOM
         run: syft scan dir:. -o cyclonedx-json > sbom.json
 
+      - name: Upload SBOM
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbom
+          path: sbom.json
+
       # 5. Run dependency (SCA) scan — fails the job on Critical severity
       - name: Install Grype
         run: curl -sSfL https://raw.githubusercontent.com/anchore/grype/main/install.sh | sh -s -- -b /usr/local/bin
 
-      - name: Run Grype (fail on Critical)
+      - name: Run Grype scan
+        run: grype sbom:./sbom.json -o json > grype-report.json
+
+      - name: Upload Grype report
+        uses: actions/upload-artifact@v4
+        with:
+          name: grype-report
+          path: grype-report.json
+
+      - name: Enforce policy (fail on Critical)
         run: grype sbom:./sbom.json --fail-on critical
 
       # 6. Run SAST scan — Semgrep fails the job automatically when it finds issues
       - name: Run Semgrep
         run: |
           pip install semgrep
-          semgrep --config auto --error
+          semgrep --config auto --json --output semgrep-report.json
+
+      - name: Upload Semgrep report
+        uses: actions/upload-artifact@v4
+        with:
+          name: semgrep-report
+          path: semgrep-report.json
+
+      - name: Enforce policy (fail on Semgrep findings)
+        run: semgrep --config auto --error
